@@ -1,47 +1,61 @@
 # Database Design
 
-The project uses PostgreSQL because the university requirement calls for a relational database management system. Prisma provides typed access and migration history.
+PostgreSQL provides relational storage and Prisma provides typed access and migration history.
 
 ## Main Tables
 
 | Table | Purpose |
 |---|---|
-| `User` | Accounts, roles, provider users, and machine operators |
-| `Machine` | Asset identity, location, status, warranty, and assigned operator |
-| `MachinePart` | Machine parts, quantity, warranty, and replacement due date |
+| `User` | Accounts, roles, providers, and machine operators |
+| `Machine` | Asset identity, status, warranty, and assigned operator |
+| `MachinePart` | Parts, quantity, warranty, and replacement date |
 | `MaintenancePlan` | Frequency, next due date, threshold, and active state |
 | `Alert` | Warranty, replacement, and maintenance alerts |
-| `WorkOrder` | Approved internal/external maintenance tasks |
-| `ServiceEvidence` | Reports, invoices, payment slips, and photos |
+| `WorkOrder` | Approval, provider assignment, service state, cost, dates, parts, and notes |
+| `ServiceEvidence` | Report, invoice, payment-slip, photo, and other file metadata |
 | `AuditLog` | Important business and security actions |
 
-## Milestone 3 Relationships
+## Work Order Relationships
 
-- One Machine Operator can be assigned many machines.
-- Each machine has zero or one assigned operator.
-- One machine can have many parts.
-- One machine can have many maintenance plans.
-- Deleting a machine cascades to its parts and maintenance plans through existing foreign-key relationships.
-- Changing an assigned user's role away from Machine Operator, or deactivating that user, clears all related machine assignments atomically with the user update.
+- A machine can have many work orders.
+- A work order belongs to one machine and can have one assigned Service Provider.
+- A work order can have many evidence rows.
+- Each evidence row records the uploading user.
+- Operator authority is derived from `WorkOrder.machine.assignedOperatorId`; it is not duplicated on the work order.
+- Provider visibility is derived from `WorkOrder.providerId` and the work-order status.
 
-## Asset Fields
+## Work Order Fields
 
-| Record | Important fields |
+| Field | Purpose |
 |---|---|
-| Machine | Asset code, name, category, location, manufacturer, model, serial number, warranty start/end, status, operator |
-| Machine Part | Name, part number, quantity, warranty start/end, replacement due date |
-| Maintenance Plan | Title, description, frequency, custom interval days, next due date, threshold days, active state |
+| `status` | Current workflow state |
+| `scheduledDate` | Planned service date |
+| `completedDate` | Actual completion date supplied by the provider |
+| `cost` | Optional nonnegative service cost |
+| `replacedParts` | Provider-entered replaced-parts summary |
+| `notes` | General service notes |
+| `providerId` | Selected active Service Provider |
+| `approvedById` / `approvedAt` | Operator approval evidence |
 
-`CUSTOM` maintenance frequency requires an interval in days. Warranty and replacement fields are optional, while every maintenance plan requires a next due date.
+`ServiceEvidence` stores `type`, `fileName`, optional `fileUrl`, optional `notes`, `uploadedById`, and `createdAt`. URLs are validated as HTTP, HTTPS, or root-relative paths before persistence.
 
-## Migration Note
+## Migration
 
-Milestone 3 uses the `Machine`, `MachinePart`, `MaintenancePlan`, `User`, and `AuditLog` structures already delivered in the initial Prisma schema. It does not introduce a new Prisma migration.
+Milestone 5 adds:
 
-For a fresh database, apply the existing committed migration history. For an already initialized Milestone 2 database, regenerate Prisma Client but do not create an empty Milestone 3 migration.
+```text
+server/prisma/migrations/20261110004315_add_work_order_replaced_parts/migration.sql
+```
+
+The migration adds nullable `WorkOrder.replacedParts`. Apply it after extracting the package over a Milestone 4 installation:
 
 ```powershell
 npm run prisma:generate
+npm run prisma:migrate
 ```
 
-The schema is located at `server/prisma/schema.prisma`.
+The existing initial migration remains in the user's local repository. The Milestone 5 archive adds this migration beside that history.
+
+## Audit Records
+
+Work-order state changes, service detail updates, and evidence additions use the existing string-based `AuditLog.action` field. Every successful action records the authenticated actor and request context through the shared audit service.
