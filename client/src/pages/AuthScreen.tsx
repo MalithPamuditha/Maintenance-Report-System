@@ -1,6 +1,7 @@
 import { LockKeyhole, Wrench } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { login, setupAdmin, type User } from "../services/api";
+import { PasswordInput } from "../components/PasswordInput";
 
 type AuthScreenProps = {
   mode: "setup" | "login";
@@ -62,7 +63,7 @@ export function AuthScreen({ mode, onAuthenticated }: AuthScreenProps) {
           </label>
           <label>
             Password
-            <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} minLength={isSetup ? 8 : undefined} required />
+            <PasswordInput value={password} onChange={(event) => setPassword(event.target.value)} minLength={isSetup ? 8 : undefined} required />
           </label>
           {error && <p className="form-error" role="alert">{error}</p>}
           <button className="primary-button" disabled={submitting} type="submit">

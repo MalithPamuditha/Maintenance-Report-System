@@ -1,74 +1,87 @@
 # Architecture
 
-The system uses a modular monolith architecture.
+The system is a modular monolith: a React SPA calls an Express REST API, which uses Prisma and PostgreSQL. Transition rules and authorization live in backend services, not in the UI.
 
 ```mermaid
 flowchart LR
-  User["User Browser"] --> Web["React SPA"]
-  Web --> API["Express REST API"]
-  API --> Prisma["Prisma ORM"]
-  Prisma --> DB["PostgreSQL"]
-  API --> Logs["Pino Logs + AuditLog"]
-  Scheduler["Startup + Daily Scheduler"] --> Prisma
+  Browser[React SPA] --> API[Express API]
+  API --> Prisma[Prisma ORM]
+  Prisma --> DB[PostgreSQL]
+  Scheduler[Alert scheduler] --> Prisma
+  API --> Audit[Pino and AuditLog]
 ```
 
-## Components
+## Milestone 5.5 workflow boundary
 
-| Component | Responsibility |
-|---|---|
-| React SPA | Role dashboards, asset screens, alert list and acknowledgement controls |
-| Express API | Authentication, RBAC, CRUD, alerts, reports, and business rules |
-| Prisma ORM | Typed database access, transactions, and migrations |
-| PostgreSQL | Relational storage and the unique alert deduplication constraint |
-| Alert scheduler | Daily due-date evaluation, alert generation, and stale-alert reconciliation |
-| Audit layer | Security and business actions, including scheduler and alert lifecycle events |
-| Swagger | API contract documentation |
-
-## Milestone 4 Scheduler Boundary
-
-The scheduler remains inside the API modular monolith. It is not a separate microservice. The API starts one scheduler process at application startup and schedules subsequent runs once per day while that API process remains active. The default daily time is 01:00 in `Asia/Colombo`; `ALERT_SCHEDULER_HOUR` and `ALERT_SCHEDULER_TIMEZONE` configure it.
-
-The same scheduler service is called by both automatic execution and `POST /api/alerts/run-scheduler`. The route adds Admin/Manager authorization and a user actor; it does not duplicate deadline logic.
+Each transition loads the current order inside a serializable transaction, verifies status plus the actor's role and relationship, applies the mutation, and writes its audit event.
 
 ```mermaid
 flowchart TD
-  Trigger["Startup, daily timer, or manual run"] --> Evaluate["Evaluate four due-date sources"]
-  Evaluate --> Upsert["Generate alerts by unique dedupeKey"]
-  Upsert --> Reconcile["Resolve stale alerts"]
-  Reconcile --> Audit["Write scheduler and lifecycle audit actions"]
+  Operator[Operator request] --> Management[Management dispatch]
+  Management --> Provider[Provider service]
+  Provider --> Payment[Payment review]
+  Payment -->|Approve| Asset[Asset dates updated]
+  Payment -->|Counter| Revision[Provider price revision]
+  Revision --> Payment
 ```
 
-## Deadline Evaluation
+## Authorization boundary
 
-| Source | Alert type | Warning threshold |
-|---|---|---|
-| `Machine.warrantyEnd` | `MACHINE_WARRANTY` | 7 days by default |
-| `MachinePart.warrantyEnd` | `PART_WARRANTY` | 7 days by default |
-| `MachinePart.replacementDue` | `PART_REPLACEMENT` | 7 days by default |
-| `MaintenancePlan.nextDueDate` | `MAINTENANCE_DUE` | The plan's `thresholdDays` value |
-
-Only `ACTIVE` and `UNDER_MAINTENANCE` machines participate. Parts and plans inherit that machine eligibility. Only active maintenance plans are evaluated, and optional machine/part dates are skipped when absent.
-
-## Idempotency and Reconciliation
-
-Each due event has a deterministic `dedupeKey` derived from its alert type, source record, and due event. `Alert.dedupeKey` is unique in PostgreSQL, so repeated, overlapping, or manually triggered runs cannot create a second alert for the same event.
-
-After generation, the scheduler reconciles existing active alerts against current source data. If the source no longer qualifies because its date changed, its date was cleared, its maintenance plan became inactive, or its machine is no longer alertable, the alert changes to `RESOLVED` and receives `resolvedAt`. A changed due date is treated as a new due event, allowing a new dedupe key when it becomes eligible. If the exact same due event later qualifies again, its existing resolved alert is reopened instead of duplicated.
-
-## API and Authorization Boundary
-
-| Endpoint | Authorization behavior |
+| Actor | Backend scope |
 |---|---|
-| `GET /api/alerts` | Admin, Owner, and Manager receive all alerts; Machine Operator receives assigned-machine alerts; Service Provider is denied |
-| `PATCH /api/alerts/:alertId/acknowledge` | The same visibility rules are enforced before acknowledgement |
-| `POST /api/alerts/run-scheduler` | Admin and Manager only |
+| Admin, Owner, Manager | All requests; review, dispatch, rejection, cancellation, and payment approval |
+| Owner, Manager | Price counteroffer with revised budget and reason |
+| Machine Operator | Own assigned machines; asset dates, alerts, and requests for that scope |
+| Service Provider | Assigned dispatched-or-later requests; acceptance, service, replacement, evidence, completion |
 
-All role filtering is enforced by the Express API. Frontend visibility is only a usability layer.
+Providers cannot discover drafts or management-review records. Assigned work orders include the safe machine-part context the provider needs, so the provider UI never calls operator-only asset endpoints. Operators cannot create requests for another operator's machine or assign providers. Payment approval is management-only.
 
-## Audit Boundary
+## State rules
 
-The scheduler and alert routes create `ALERT_GENERATED`, `ALERT_RESOLVED`, `ALERT_ACKNOWLEDGED`, and `ALERT_SCHEDULER_RUN` records. Automatic scheduler actions may use a null actor; manual scheduler runs and acknowledgements use the authenticated actor.
+The new path is:
 
-## Architecture Decision
+`DRAFT -> PENDING_MANAGEMENT_APPROVAL -> SENT_TO_PROVIDER -> PROVIDER_ACCEPTED -> IN_PROGRESS -> AWAITING_PAYMENT_APPROVAL -> CLOSED`
 
-The project uses a modular monolith, not microservices. This keeps the prototype realistic for a three-member university team while separating frontend, API, scheduler, reporting, and database responsibilities. Milestone 4 does not require an external queue, hosted cron service, or messaging provider.
+During payment review, an Owner or Manager may branch to `PRICE_REVISION_REQUESTED`. The provider may edit service/labour cost and replacement quantity or unit cost, then resubmit to `AWAITING_PAYMENT_APPROVAL`. This loop can repeat until management approves.
+
+Management can reject a pending request or cancel a nonterminal request. Terminal requests cannot move backward. Legacy statuses remain supported for existing rows.
+
+Provider completion creates a `PAYMENT_APPROVAL` alert. Payment approval resolves that alert, applies each `WorkOrderReplacement` warranty and next-replacement date to `MachinePart`, and closes the order in the same transaction.
+
+## Financial calculation
+
+Management records the proposed budget during provider dispatch. The provider cannot overwrite it. During service, the provider records a service/labour charge and one or more replacement lines. Existing machine parts can be selected, and extra or unlisted parts can be added without a `machinePartId`.
+
+`parts total = sum(quantity x unit cost)`
+
+`final total = service/labour charge + parts total`
+
+`budget variance = final total - proposed budget`
+
+The payment alert and audit events include the calculated values. Completion is blocked until the service charge and every replacement unit cost are present.
+
+A management counteroffer updates the current proposed budget and stores an immutable `WorkOrderPriceCounter` history row containing the reviewed provider total, counter budget, reason, author, and response time. The counter budget is a negotiation target, not an equality constraint. The provider's revised final total may remain above or below it when the receipt is resubmitted.
+
+## Activity, payments, evidence, and printing
+
+The overview reads `AuditLog` through an explicit actor hierarchy:
+
+| Viewer | Visible audit actors |
+|---|---|
+| Admin | Every role |
+| Owner | Owner, Manager, and Machine Operator |
+| Manager | Manager and Machine Operator |
+| Machine Operator | Only the signed-in operator |
+| Service Provider | Only the signed-in provider |
+
+The payment dashboard is available to Admin, Owner, Manager, and Service Provider. Management roles see all finalized payments as organization cash outflow; a provider sees only payments for work orders assigned to that provider as cash inflow. Payment value, replaced parts, machine, provider, approver, payment date/reference, proposed budget, variance, and monthly totals are derived from approved `CLOSED` work orders.
+
+Evidence stores metadata, uploader, and an optional safe HTTP, HTTPS, or root-relative URL. Binary storage remains outside this milestone. The frontend produces a printable service slip from persisted request, service, replacement, cost, evidence, organization identity, and provider invoice data.
+
+## Audit boundary
+
+Milestone 5.5 adds audit actions for management dispatch/rejection, provider acceptance, replacement add/update/remove, completion submission, price counteroffers, payment approval, and alert reopen. Existing asset, alert, authentication, and legacy work-order actions remain intact.
+
+## Architecture decision
+
+The project remains a modular monolith. This keeps authorization, state transitions, part-date updates, payment-alert resolution, and audit recording atomic while preserving module boundaries for future extraction.

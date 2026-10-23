@@ -13,6 +13,7 @@ export const publicUserSelect = {
   email: true,
   role: true,
   isActive: true,
+  archivedAt: true,
   createdAt: true,
   updatedAt: true
 } as const;
@@ -38,7 +39,7 @@ export async function hashPassword(password: string) {
 export async function authenticateUser(email: string, password: string) {
   const user = await prisma.user.findUnique({ where: { email: normalizeEmail(email) } });
 
-  if (!user || !user.isActive || !(await bcrypt.compare(password, user.passwordHash))) {
+  if (!user || !user.isActive || user.archivedAt || !(await bcrypt.compare(password, user.passwordHash))) {
     throw new HttpError(401, "Invalid email or password");
   }
 

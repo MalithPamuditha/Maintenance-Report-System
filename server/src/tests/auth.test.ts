@@ -29,6 +29,7 @@ const admin = {
   passwordHash: bcrypt.hashSync("Admin@12345", 4),
   role: Role.ADMIN,
   isActive: true,
+  archivedAt: null,
   createdAt: new Date(),
   updatedAt: new Date()
 };
@@ -74,6 +75,22 @@ describe("authentication and access control", () => {
     const response = await request(app).post("/api/auth/login").send({
       email: "missing@example.com",
       password: "WrongPassword"
+    });
+
+    expect(response.status).toBe(401);
+    expect(response.body.message).toBe("Invalid email or password");
+  });
+
+  it("rejects an archived account even if its password is correct", async () => {
+    vi.mocked(prisma.user.findUnique).mockResolvedValue({
+      ...admin,
+      isActive: false,
+      archivedAt: new Date("2026-11-19T00:00:00.000Z")
+    });
+
+    const response = await request(app).post("/api/auth/login").send({
+      email: admin.email,
+      password: "Admin@12345"
     });
 
     expect(response.status).toBe(401);

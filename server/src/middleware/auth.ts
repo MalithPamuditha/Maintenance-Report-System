@@ -32,7 +32,7 @@ export const requireAuth: RequestHandler = async (req, _res, next) => {
   const payload = verifyAuthToken(token);
   const user = await prisma.user.findUnique({ where: { id: payload.sub } });
 
-  if (!user || !user.isActive) {
+  if (!user || !user.isActive || user.archivedAt) {
     throw new HttpError(401, "Authentication required");
   }
 

@@ -10,6 +10,6 @@ npm-debug.log*
 .idea/
 .vscode/
 !.vscode/extensions.json
-apps/api/prisma/migrations/dev.db
+server/prisma/migrations/dev.db
 tmp/
 uploads/
