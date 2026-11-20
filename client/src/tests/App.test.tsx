@@ -38,6 +38,12 @@ describe("App", () => {
 
     expect(await screen.findByRole("heading", { name: /Create administrator/i })).toBeInTheDocument();
     expect(screen.getByLabelText(/Full name/i)).toBeInTheDocument();
+    const password = screen.getByLabelText(/^Password$/i);
+    expect(password).toHaveAttribute("type", "password");
+    fireEvent.click(screen.getByRole("button", { name: "Show password" }));
+    expect(password).toHaveAttribute("type", "text");
+    fireEvent.click(screen.getByRole("button", { name: "Hide password" }));
+    expect(password).toHaveAttribute("type", "password");
   });
 
   it("renders the authenticated administrator dashboard", async () => {

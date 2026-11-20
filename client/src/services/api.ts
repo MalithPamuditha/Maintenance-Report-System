@@ -6,6 +6,7 @@ export type User = {
   email: string;
   role: Role;
   isActive: boolean;
+  archivedAt?: string | null;
   createdAt?: string;
   updatedAt?: string;
 };
@@ -446,7 +447,7 @@ export function createUser(input: UserInput) {
   });
 }
 
-export function updateUser(id: string, input: Partial<UserInput & Pick<User, "isActive">>) {
+export function updateUser(id: string, input: Partial<UserInput & Pick<User, "isActive">> & { isArchived?: boolean }) {
   return apiRequest<{ user: User }>(`/users/${id}`, {
     method: "PATCH",
     body: JSON.stringify(input)
@@ -605,6 +606,10 @@ export function rejectWorkOrder(id: string, reason?: string) {
 
 export function acceptWorkOrder(id: string) {
   return runWorkOrderAction(id, "accept");
+}
+
+export function declineWorkOrder(id: string, reason: string) {
+  return runWorkOrderAction(id, "decline", { reason: reason.trim() });
 }
 
 export function startWorkOrder(id: string) {

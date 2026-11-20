@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WorkOrderWorkspace } from "../pages/WorkOrderWorkspace";
 import type { Machine, Role, User, WorkOrder, WorkOrderStatus } from "../services/api";
@@ -214,6 +214,46 @@ describe("WorkOrderWorkspace milestone 5.5", () => {
     expect(fetchMock.mock.calls.some(([input]) => {
       return new URL(String(input)).pathname === `/api/machines/${machine.id}/parts`;
     })).toBe(false);
+  });
+
+  it("lets the assigned provider reject an offer with a required reason", async () => {
+    let record = workOrder("SENT_TO_PROVIDER");
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+      const path = new URL(String(input)).pathname;
+      const method = init?.method ?? "GET";
+      if (path === "/api/work-orders" && method === "GET") return response({ workOrders: [record] });
+      if (path === `/api/work-orders/${record.id}` && method === "GET") return response({ workOrder: record });
+      if (path === "/api/organization-profile") return response({ profile: organization });
+      if (path.endsWith("/decline") && method === "POST") {
+        const body = JSON.parse(String(init?.body));
+        record = workOrder("PENDING_MANAGEMENT_APPROVAL", {
+          providerId: null,
+          provider: null,
+          rejectionReason: body.reason
+        });
+        return response({ workOrder: record });
+      }
+      return response({ message: "Not found" }, 404);
+    });
+
+    render(<WorkOrderWorkspace user={currentUser("SERVICE_PROVIDER")} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Reject offer" }));
+
+    const dialog = screen.getByRole("dialog", { name: "Reject service offer" });
+    const submit = within(dialog).getByRole("button", { name: "Reject offer" });
+    expect(submit).toBeDisabled();
+    fireEvent.change(within(dialog).getByLabelText("Reason for rejection"), {
+      target: { value: "Workshop capacity is unavailable this week" }
+    });
+    fireEvent.click(submit);
+
+    await waitFor(() => expect(fetchMock.mock.calls.some(([input, init]) => {
+      return new URL(String(input)).pathname.endsWith("/decline") && init?.method === "POST";
+    })).toBe(true));
+    const declineRequest = fetchMock.mock.calls.find(([input]) => new URL(String(input)).pathname.endsWith("/decline"));
+    expect(JSON.parse(String(declineRequest?.[1]?.body))).toEqual({
+      reason: "Workshop capacity is unavailable this week"
+    });
   });
 
   it("lets the assigned provider save receipt identity without protected asset calls", async () => {

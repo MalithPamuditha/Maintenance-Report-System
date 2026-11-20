@@ -1,5 +1,6 @@
-import { Activity, AlertTriangle, Boxes, Building2, ClipboardList, Database, LayoutDashboard, LogOut, Save, ShieldCheck, Users, WalletCards, Wrench } from "lucide-react";
+import { Activity, AlertTriangle, Archive, Boxes, Building2, ClipboardList, Database, LayoutDashboard, LogOut, RotateCcw, Save, ShieldCheck, Users, WalletCards, Wrench } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
+import { PasswordInput } from "../components/PasswordInput";
 import { AssetWorkspace } from "./AssetWorkspace";
 import { AlertWorkspace } from "./AlertWorkspace";
 import { WorkOrderWorkspace, type NewServiceRequest } from "./WorkOrderWorkspace";
@@ -47,6 +48,7 @@ const activityLabels: Record<string, string> = {
   WORK_ORDER_SUBMITTED: "submitted a service request",
   WORK_ORDER_APPROVED_AND_DISPATCHED: "approved and dispatched a service request",
   WORK_ORDER_PROVIDER_ACCEPTED: "accepted a service request",
+  WORK_ORDER_PROVIDER_DECLINED: "declined a service request",
   WORK_ORDER_STARTED: "started service work",
   WORK_ORDER_SERVICE_DETAILS_UPDATED: "updated service and receipt details",
   WORK_ORDER_REPLACEMENT_ADDED: "recorded a replacement part",
@@ -58,7 +60,9 @@ const activityLabels: Record<string, string> = {
   WORK_ORDER_PAYMENT_COUNTERED: "sent a price counteroffer",
   WORK_ORDER_REJECTED: "rejected a service request",
   WORK_ORDER_CANCELLED: "cancelled a service request",
-  ORGANIZATION_PROFILE_UPDATED: "updated the receipt identity"
+  ORGANIZATION_PROFILE_UPDATED: "updated the receipt identity",
+  USER_ARCHIVED: "archived a user account",
+  USER_RESTORED: "restored a user account"
 };
 
 function activityDescription(action: string) {
@@ -159,6 +163,28 @@ export function Dashboard({ user, onLoggedOut }: DashboardProps) {
       setError(requestError instanceof Error ? requestError.message : "Unable to update user");
     }
   }
+
+  async function archiveUser(target: User) {
+    if (!window.confirm(`Archive ${target.name}? They will be deactivated and removed from normal user lists.`)) return;
+    try {
+      const response = await updateUser(target.id, { isArchived: true });
+      setUsers((current) => current.map((item) => (item.id === target.id ? response.user : item)));
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "Unable to archive user");
+    }
+  }
+
+  async function restoreUser(target: User) {
+    try {
+      const response = await updateUser(target.id, { isArchived: false });
+      setUsers((current) => current.map((item) => (item.id === target.id ? response.user : item)));
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "Unable to restore user");
+    }
+  }
+
+  const currentUsers = users.filter((item) => !item.archivedAt);
+  const archivedUsers = users.filter((item) => Boolean(item.archivedAt));
 
   const metrics = [
     { label: "Machines", value: summary?.totals.machines ?? "-", icon: Database },
@@ -265,30 +291,59 @@ export function Dashboard({ user, onLoggedOut }: DashboardProps) {
           <section className="admin-section">
             <div className="section-heading">
               <div><p className="eyebrow">Administration</p><h2>User management</h2></div>
-              <span>{users.length} accounts</span>
+              <span>{currentUsers.length} current | {archivedUsers.length} archived</span>
             </div>
 
             <form className="user-form" onSubmit={handleCreateUser}>
               <label>Name<input value={name} onChange={(event) => setName(event.target.value)} required minLength={2} /></label>
               <label>Email<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} required /></label>
-              <label>Temporary password<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} required minLength={8} /></label>
+              <label>Temporary password<PasswordInput value={password} onChange={(event) => setPassword(event.target.value)} required minLength={8} /></label>
               <label>Role<select value={role} onChange={(event) => setRole(event.target.value as Role)}>{roles.map((item) => <option key={item} value={item}>{roleLabels[item]}</option>)}</select></label>
               <button className="primary-button" type="submit">Add user</button>
             </form>
 
             <div className="user-list">
-              {users.map((item) => (
+              {currentUsers.map((item) => (
                 <article className="user-row" key={item.id}>
                   <div className="user-avatar" aria-hidden="true">{item.name.slice(0, 1).toUpperCase()}</div>
                   <div className="user-identity"><strong>{item.name}</strong><span>{item.email}</span></div>
                   <span className="role-pill">{roleLabels[item.role]}</span>
                   <span className={item.isActive ? "status-active" : "status-inactive"}>{item.isActive ? "Active" : "Inactive"}</span>
-                  <button className="secondary-button" disabled={item.id === user.id} onClick={() => toggleUser(item)} type="button">
-                    {item.isActive ? "Deactivate" : "Activate"}
-                  </button>
+                  <div className="user-actions">
+                    <button className="secondary-button" disabled={item.id === user.id} onClick={() => toggleUser(item)} type="button">
+                      {item.isActive ? "Deactivate" : "Activate"}
+                    </button>
+                    <button className="secondary-button archive-button button-with-icon" disabled={item.id === user.id} onClick={() => archiveUser(item)} type="button">
+                      <Archive aria-hidden="true" /> Archive
+                    </button>
+                  </div>
                 </article>
               ))}
             </div>
+
+            {archivedUsers.length > 0 && (
+              <section className="archived-users" aria-labelledby="archived-users-heading">
+                <div className="section-heading compact">
+                  <div><p className="eyebrow">History</p><h3 id="archived-users-heading">Archived users</h3></div>
+                  <span>{archivedUsers.length} accounts</span>
+                </div>
+                <div className="user-list">
+                  {archivedUsers.map((item) => (
+                    <article className="user-row archived" key={item.id}>
+                      <div className="user-avatar" aria-hidden="true">{item.name.slice(0, 1).toUpperCase()}</div>
+                      <div className="user-identity"><strong>{item.name}</strong><span>{item.email}</span></div>
+                      <span className="role-pill">{roleLabels[item.role]}</span>
+                      <span className="status-archived">Archived</span>
+                      <div className="user-actions">
+                        <button className="secondary-button button-with-icon" onClick={() => restoreUser(item)} type="button">
+                          <RotateCcw aria-hidden="true" /> Restore
+                        </button>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              </section>
+            )}
           </section>
           )}
         </>}
